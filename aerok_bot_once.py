@@ -50,9 +50,19 @@ async def check_naver_flights(page, target):
     print(f"  [{target['name']} ({date_str}) | {target['airline']}] 접속 중...")
 
     try:
-        await page.goto(url, wait_until="domcontentloaded", timeout=40000)
-        await asyncio.sleep(12)
-        await page.evaluate("window.scrollTo(0, 500)")
+        await page.goto(url, wait_until="domcontentloaded", timeout=60000)
+        
+        # 1. 렌더링 완료까지 능동 대기 (최대 25초)
+        for _ in range(25):
+            body_text = await page.evaluate("document.body.innerText || ''")
+            if "원" in body_text or "조건에 맞는" in body_text or "결과가 없습니다" in body_text:
+                break
+            await asyncio.sleep(1)
+
+        # 2. 2단계 연속 스크롤로 지연 로딩 요소 강제 노출
+        await page.evaluate("window.scrollTo(0, 800)")
+        await asyncio.sleep(2)
+        await page.evaluate("window.scrollTo(0, 1600)")
         await asyncio.sleep(2)
 
         payload = {"kwList": keywords, "maxPrice": max_price}
@@ -73,15 +83,22 @@ async def check_naver_flights(page, target):
             let targetAirlineMinPrice = null;
 
             for (let el of allElements) {
-                if (el.children.length <= 3) {
+                // 탐색 요소 구조 범위 확장 (children <= 5)
+                if (el.children.length <= 5) {
                     const text = (el.innerText || el.textContent || "").toLowerCase();
                     if (args.kwList.some(kw => text.includes(kw.toLowerCase()))) {
                         foundTargetAirline = true;
                         let card = el;
-                        while (card && card !== document.body) {
+                        
+                        // 상위 카드 부모 요소 탐색 (최대 10단계)
+                        for (let depth = 0; depth < 10; depth++) {
+                            if (!card || card === document.body) break;
                             const cardText = card.innerText || "";
+                            const lowerCardText = cardText.toLowerCase();
+
                             if (cardText.includes("원")) {
-                                if (!competingAirlines.some(ca => cardText.toLowerCase().includes(ca))) {
+                                const hasConflict = competingAirlines.some(ca => lowerCardText.includes(ca));
+                                if (!hasConflict) {
                                     const priceRegex = /([0-9,]+)\s*원/g;
                                     let match;
                                     while ((match = priceRegex.exec(cardText)) !== null) {
@@ -93,7 +110,9 @@ async def check_naver_flights(page, target):
                                         }
                                     }
                                     if (targetAirlineMinPrice !== null) break;
-                                } else break;
+                                } else {
+                                    break;
+                                }
                             }
                             card = card.parentElement;
                         }
@@ -127,11 +146,9 @@ async def main():
         timestamp = time.strftime('%Y-%m-%d %H:%M:%S')
         print(f"[{timestamp}] 🔎 GitHub Actions 1회 자동 스캔 시작")
 
-        # 1. 깃허브 실행 시 텔레그램 시작 알림 전송
         start_msg = f"🤖 *[GitHub Actions]* 항공권 자동 모니터링 스캔을 시작합니다.\n• 실행 시각: {timestamp}"
         send_telegram_message(start_msg)
 
-        # 2. 노선별 스캔 진행 및 상세 로그 출력
         for target in TARGETS:
             found, naver_url, price = await check_naver_flights(page, target)
             price_text = f"{price:,}원" if price else "미감지"
