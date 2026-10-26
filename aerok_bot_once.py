@@ -7,9 +7,11 @@ from playwright.async_api import async_playwright
 
 load_dotenv()
 
-# GitHub Secrets 및 로컬 .env 모두 대응
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
+
+# GitHub Actions 누적 실행 회차 번호 가져오기
+GITHUB_RUN_NUMBER = os.getenv("GITHUB_RUN_NUMBER")
 
 TARGETS = [
     {
@@ -48,7 +50,7 @@ def send_telegram_message(message: str):
         print(f"[오류] 네트워크 예외: {e}")
 
 async def check_naver_flights(page, target):
-    """검증된 항공사 및 가격 추출 로직"""
+    """네이버 항공권 검색 로직"""
     origin = target["origin"]
     destination = target["destination"]
     date_str = target["date"]
@@ -63,7 +65,7 @@ async def check_naver_flights(page, target):
 
     try:
         await page.goto(url, wait_until="domcontentloaded", timeout=40000)
-        await asyncio.sleep(12)  # 동적 항공권 데이터 로딩 대기
+        await asyncio.sleep(12)
 
         await page.evaluate("window.scrollTo(0, 500)")
         await asyncio.sleep(2)
@@ -176,12 +178,28 @@ async def main():
         page = await context.new_page()
 
         timestamp = time.strftime('%Y-%m-%d %H:%M:%S')
-        print(f"[{timestamp}] 🔎 GitHub Actions 1회 자동 스캔 시작")
+        print(f"[{timestamp}] 🔎 GitHub Actions 스캔 진행")
 
-        # 스캔 시작 텔레그램 알림
-        start_msg = f"🤖 *[GitHub Actions]* 항공권 스캔을 진행합니다.\n• 실행 시각: {timestamp}"
-        send_telegram_message(start_msg)
+        # -------------------------------------------------------------
+        # [시작 알림 조건부 발송]
+        # - GitHub Actions: 10회 스캔당 1회 (10번째, 20번째, 30번째...)
+        # - 로컬 PC 테스트: 항상 발송
+        # -------------------------------------------------------------
+        should_send_start_msg = True
+        run_info = ""
 
+        if GITHUB_RUN_NUMBER is not None:
+            run_num = int(GITHUB_RUN_NUMBER)
+            run_info = f" (누적 #{run_num}회차 스캔)"
+            # 10으로 나누어 떨어지지 않으면 시작 알림 생략
+            if run_num % 10 != 0:
+                should_send_start_msg = False
+
+        if should_send_start_msg:
+            start_msg = f"🤖 *[GitHub Actions]* 항공권 자동 모니터링 정기 알림{run_info}\n• 실행 시각: {timestamp}\n• (안내: 스캔 동작 알림은 10회 스캔마다 1회 발송됩니다)"
+            send_telegram_message(start_msg)
+
+        # 항공권 스캔 및 감지 시 실시간 알림 전송 (이 부분은 언제나 동작)
         for target in TARGETS:
             found, naver_url, price = await check_naver_flights(page, target)
             price_text = f"{price:,}원" if price else "미감지"
